@@ -253,6 +253,29 @@ describe('uploader', () => {
       }, 100);
     });
 
+    it('retryUpload should make new request', done => {
+      const uploadRef = React.createRef<any>();
+      render(<Upload ref={uploadRef} action="/test" />);
+
+      const file = {
+        name: 'retry.png',
+        toString() {
+          return this.name;
+        },
+      };
+      const files = [file];
+      (files as any).item = (i: number) => files[i];
+
+      const initialRequestCount = requests.length;
+
+      uploadRef.current.retryUpload(file as any);
+
+      setTimeout(() => {
+        expect(requests.length).toBe(initialRequestCount + 1);
+        done();
+      }, 100);
+    });
+
     it('drag to upload', done => {
       const input = uploader.container.querySelector('input')!;
 
