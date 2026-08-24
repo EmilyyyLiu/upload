@@ -276,6 +276,34 @@ describe('uploader', () => {
       }, 100);
     });
 
+    it('retryUpload should not make request when action rejects', done => {
+      const uploadRef = React.createRef<any>();
+      render(
+        <Upload
+          ref={uploadRef}
+          action={async () => {
+            throw new Error('action error');
+          }}
+        />,
+      );
+
+      const file = {
+        name: 'reject.png',
+        toString() {
+          return this.name;
+        },
+      };
+
+      const initialRequestCount = requests.length;
+
+      uploadRef.current.retryUpload(file as any);
+
+      setTimeout(() => {
+        expect(requests.length).toBe(initialRequestCount);
+        done();
+      }, 100);
+    });
+
     it('drag to upload', done => {
       const input = uploader.container.querySelector('input')!;
 
