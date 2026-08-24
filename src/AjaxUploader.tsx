@@ -302,11 +302,13 @@ class AjaxUploader extends Component<UploadProps> {
   }
 
   retryUpload = (originFile: RcFile) => {
-    this.processFile(originFile, [originFile]).then(fileInfo => {
-      if (fileInfo.parsedFile !== null) {
-        this.post(fileInfo);
-      }
-    });
+    this.processFile(originFile, [originFile])
+      .then(fileInfo => {
+        if (fileInfo.parsedFile) {
+          this.post(fileInfo);
+        }
+      })
+      .catch(() => {});
   };
 
   reset() {
