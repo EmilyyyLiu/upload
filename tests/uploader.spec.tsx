@@ -304,6 +304,34 @@ describe('uploader', () => {
       }, 100);
     });
 
+    it('retryUpload should not start overlapping request for the same file', done => {
+      const uploadRef = React.createRef<any>();
+      render(<Upload ref={uploadRef} action="/test" />);
+
+      const file = {
+        name: 'overlap.png',
+        toString() {
+          return this.name;
+        },
+      };
+      (file as any).uid = 'fixed-overlap-uid';
+
+      const initialRequestCount = requests.length;
+
+      uploadRef.current.retryUpload(file as any);
+      uploadRef.current.retryUpload(file as any);
+
+      setTimeout(() => {
+        expect(requests.length).toBe(initialRequestCount + 1);
+
+        expect(requests[requests.length - 1].aborted).toBeFalsy();
+
+        uploadRef.current.abort(file);
+        expect(requests[requests.length - 1].aborted).toBe(true);
+        done();
+      }, 100);
+    });
+
     it('drag to upload', done => {
       const input = uploader.container.querySelector('input')!;
 

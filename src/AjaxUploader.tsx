@@ -302,8 +302,12 @@ class AjaxUploader extends Component<UploadProps> {
   }
 
   retryUpload = (originFile: RcFile) => {
+    const { uid } = originFile;
     this.processFile(originFile, [originFile])
       .then(fileInfo => {
+        if (this.reqs[uid]) {
+          return;
+        }
         if (fileInfo.parsedFile) {
           this.post(fileInfo);
         }
