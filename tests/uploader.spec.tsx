@@ -253,7 +253,7 @@ describe('uploader', () => {
       }, 100);
     });
 
-    it('retryUpload should make new request', done => {
+    it('retry should make new request', done => {
       const uploadRef = React.createRef<any>();
       render(<Upload ref={uploadRef} action="/test" />);
 
@@ -268,7 +268,7 @@ describe('uploader', () => {
 
       const initialRequestCount = requests.length;
 
-      uploadRef.current.retryUpload(file as any);
+      uploadRef.current.retry(file as any);
 
       setTimeout(() => {
         expect(requests.length).toBe(initialRequestCount + 1);
@@ -276,7 +276,7 @@ describe('uploader', () => {
       }, 100);
     });
 
-    it('retryUpload should not make request when action rejects', done => {
+    it('retry should not make request when action rejects', done => {
       const uploadRef = React.createRef<any>();
       render(
         <Upload
@@ -296,7 +296,7 @@ describe('uploader', () => {
 
       const initialRequestCount = requests.length;
 
-      uploadRef.current.retryUpload(file as any);
+      uploadRef.current.retry(file as any);
 
       setTimeout(() => {
         expect(requests.length).toBe(initialRequestCount);
@@ -304,7 +304,7 @@ describe('uploader', () => {
       }, 100);
     });
 
-    it('retryUpload should not start overlapping request for the same file', done => {
+    it('retry should not start overlapping request for the same file', done => {
       const uploadRef = React.createRef<any>();
       render(<Upload ref={uploadRef} action="/test" />);
 
@@ -318,8 +318,8 @@ describe('uploader', () => {
 
       const initialRequestCount = requests.length;
 
-      uploadRef.current.retryUpload(file as any);
-      uploadRef.current.retryUpload(file as any);
+      uploadRef.current.retry(file as any);
+      uploadRef.current.retry(file as any);
 
       setTimeout(() => {
         expect(requests.length).toBe(initialRequestCount + 1);

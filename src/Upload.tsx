@@ -30,8 +30,8 @@ class Upload extends Component<UploadProps> {
     this.uploader.abort(file);
   }
 
-  retryUpload(file: RcFile) {
-    this.uploader.retryUpload(file);
+  retry(file: RcFile) {
+    this.uploader.retry(file);
   }
 
   saveUploader = (node: AjaxUpload) => {
