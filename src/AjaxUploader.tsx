@@ -292,8 +292,6 @@ class AjaxUploader extends Component<UploadProps> {
         const { onSuccess } = this.props;
         onSuccess?.(ret, parsedFile, xhr);
 
-        this.fileInfoCache.delete(uid);
-
         delete this.reqs[uid];
       },
       onError: (err: UploadRequestError, ret: any) => {
@@ -318,7 +316,6 @@ class AjaxUploader extends Component<UploadProps> {
       }
     } catch (e) {
       delete this.reqs[uid];
-      this.fileInfoCache.delete(uid);
       const { onError } = this.props;
       const err = e as UploadRequestError;
       err.name = err.name || 'UploadRequestError';

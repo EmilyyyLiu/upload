@@ -269,19 +269,18 @@ describe('uploader', () => {
       uploadRef.current.retry(file as any);
       await sleep(0);
 
-      // No XHR created, and onError receives UploadRetrySkipError
       expect(requests.length).toBe(initialRequestCount);
       expect(onError.calledOnce).toBeTruthy();
       expect(onError.firstCall.args[0]?.name).toBe('UploadRetrySkipError');
       unmount();
     });
 
-    it('double retry only starts one request and abort still works', async () => {
-      const uploadRef = React.createRef<any>();
+    it('reqs placeholder blocks concurrent retry and abort still works', async () => {
+      const ref1 = React.createRef<any>();
       let onStartCalled = 0;
-      const { container, unmount } = render(
+      const { container: c1, unmount: u1 } = render(
         <Upload
-          ref={uploadRef}
+          ref={ref1}
           action="/test"
           onStart={() => {
             onStartCalled += 1;
@@ -289,52 +288,76 @@ describe('uploader', () => {
         />,
       );
 
-      const file = {
+      const file1 = {
         name: 'dedup.png',
         toString() {
           return this.name;
         },
       };
-      (file as any).uid = 'fixed-dedup-uid';
-      const files = [file];
-      (files as any).item = (i: number) => files[i];
+      const files1 = [file1];
+      (files1 as any).item = (i: number) => files1[i];
 
-      fireEvent.change(container.querySelector('input')!, { target: { files } });
+      fireEvent.change(c1.querySelector('input')!, { target: { files: files1 } });
       await sleep(0);
       requests[0].respond(400, {}, `error 400`);
 
       const initialRequestCount = requests.length;
       onStartCalled = 0;
 
-      // reqs placeholder is set synchronously before onStart/request,
-      // so a second retry in the same tick is blocked
-      uploadRef.current.retry(file as any);
-      uploadRef.current.retry(file as any);
+      ref1.current.retry(file1 as any);
+      ref1.current.retry(file1 as any);
       await sleep(0);
 
-      // Only one request created, onStart called only once
       expect(onStartCalled).toBe(1);
       expect(requests.length).toBe(initialRequestCount + 1);
-      expect(requests[requests.length - 1].aborted).toBeFalsy();
 
-      // Abort still works
-      uploadRef.current.abort(file);
+      ref1.current.abort(file1);
       expect(requests[requests.length - 1].aborted).toBe(true);
-      unmount();
+      u1();
+
+      const ref2 = React.createRef<any>();
+      let onStartCalled2 = 0;
+      const { container: c2, unmount: u2 } = render(
+        <Upload
+          ref={ref2}
+          action="/test"
+          onStart={(file: any) => {
+            onStartCalled2 += 1;
+            ref2.current.retry(file);
+          }}
+        />,
+      );
+
+      const file2 = {
+        name: 'onstart-retry.png',
+        toString() {
+          return this.name;
+        },
+      };
+      const files2 = [file2];
+      (files2 as any).item = (i: number) => files2[i];
+
+      fireEvent.change(c2.querySelector('input')!, { target: { files: files2 } });
+      await sleep(0);
+
+      expect(onStartCalled2).toBe(1);
+      u2();
     });
 
     it('onStart throw should not leak reqs placeholder', async () => {
+      let shouldThrow = false;
+      let capturedUid: string | undefined;
       const uploadRef = React.createRef<any>();
-      const innerRef = React.createRef<any>();
       const { container, unmount } = render(
         <Upload
-          ref={(node: any) => {
-            (uploadRef as any).current = node;
-            if (node?.uploader) {
-              (innerRef as any).current = node.uploader;
+          ref={uploadRef}
+          action="/test"
+          onStart={(file: any) => {
+            capturedUid = file.uid;
+            if (shouldThrow) {
+              throw new Error('onStart boom');
             }
           }}
-          action="/test"
         />,
       );
 
@@ -344,7 +367,6 @@ describe('uploader', () => {
           return this.name;
         },
       };
-      (file as any).uid = 'fixed-onstart-throw-uid';
       const files = [file];
       (files as any).item = (i: number) => files[i];
 
@@ -354,49 +376,40 @@ describe('uploader', () => {
 
       const ajaxRef = (uploadRef as any).current?.uploader;
 
-      // Simulate onStart throwing
-      const originalOnStart = ajaxRef.props.onStart;
-      let throwCount = 0;
-      ajaxRef.props.onStart = () => {
-        throwCount += 1;
-        throw new Error('onStart boom');
-      };
-
-      // Retry: onStart throws, reqs[uid] placeholder is cleaned up
+      shouldThrow = true;
       expect(() => {
         uploadRef.current.retry(file as any);
       }).toThrow('onStart boom');
-      expect(ajaxRef.reqs['fixed-onstart-throw-uid']).toBeUndefined();
 
-      // Restore onStart so second retry works
-      ajaxRef.props.onStart = originalOnStart;
+      expect(capturedUid).toBeDefined();
+      expect(ajaxRef.reqs[capturedUid!]).toBeUndefined();
+
+      shouldThrow = false;
       uploadRef.current.retry(file as any);
       await sleep(0);
       expect(requests.length).toBe(2);
       unmount();
     });
 
-    it('retry should not re-run beforeUpload, action, or data', async () => {
+    it('retry reuses cache: no beforeUpload/action/data re-run, works after success and throw', async () => {
       const beforeUpload = sinon.spy((file: any) => file);
       const action = sinon.stub().returns('/retry-action');
       const data = sinon.stub().returns({ key: 'value' });
-      const uploadRef = React.createRef<any>();
-      const { container, unmount } = render(
-        <Upload ref={uploadRef} action={action} data={data} beforeUpload={beforeUpload} />,
+      const ref1 = React.createRef<any>();
+      const { container: c1, unmount: u1 } = render(
+        <Upload ref={ref1} action={action} data={data} beforeUpload={beforeUpload} />,
       );
 
-      const file = {
+      const file1 = {
         name: 'no-reprocess.png',
         toString() {
           return this.name;
         },
       };
-      (file as any).uid = 'fixed-uid-no-reprocess';
-      const files = [file];
-      (files as any).item = (i: number) => files[i];
+      const files1 = [file1];
+      (files1 as any).item = (i: number) => files1[i];
 
-      const input = container.querySelector('input')!;
-      fireEvent.change(input, { target: { files } });
+      fireEvent.change(c1.querySelector('input')!, { target: { files: files1 } });
       await sleep(0);
       requests[0].respond(400, {}, `error 400`);
 
@@ -404,55 +417,48 @@ describe('uploader', () => {
       const actionCallCount = action.callCount;
       const dataCallCount = data.callCount;
 
-      uploadRef.current.retry(file as any);
+      ref1.current.retry(file1 as any);
       await sleep(0);
 
       expect(beforeUpload.callCount).toBe(callCountBefore);
       expect(action.callCount).toBe(actionCallCount);
       expect(data.callCount).toBe(dataCallCount);
-      expect(requests.length).toBe(2);
-      unmount();
-    });
+      u1();
 
-    it('cache cleared: success or sync throw blocks subsequent retry', async () => {
-      // --- Path 1: onSuccess clears cache, retry fires UploadRetrySkipError ---
-      const successRef = React.createRef<any>();
-      const successOnError = sinon.spy();
-      const { container: c1, unmount: u1 } = render(
-        <Upload ref={successRef} action="/test" onError={successOnError} />,
-      );
+      const ref2 = React.createRef<any>();
+      const { container: c2, unmount: u2 } = render(<Upload ref={ref2} action="/test" />);
 
-      const file1 = {
-        name: 'success-cleanup.png',
+      const file2 = {
+        name: 'success-retry.png',
         toString() {
           return this.name;
         },
       };
-      (file1 as any).uid = 'uid-success-path';
-      const files1 = [file1];
-      (files1 as any).item = (i: number) => files1[i];
+      const files2 = [file2];
+      (files2 as any).item = (i: number) => files2[i];
 
-      fireEvent.change(c1.querySelector('input')!, { target: { files: files1 } });
+      fireEvent.change(c2.querySelector('input')!, { target: { files: files2 } });
       await sleep(0);
       requests[requests.length - 1].respond(200, {}, `["","ok"]`);
 
       const countAfterSuccess = requests.length;
-      successRef.current.retry(file1 as any);
+      ref2.current.retry(file2 as any);
       await sleep(0);
 
-      expect(requests.length).toBe(countAfterSuccess);
-      expect(successOnError.calledOnce).toBeTruthy();
-      expect(successOnError.firstCall.args[0]?.name).toBe('UploadRetrySkipError');
-      u1();
+      expect(requests.length).toBe(countAfterSuccess + 1);
+      u2();
 
-      // --- Path 2: customRequest sync throw clears cache, onError notified, retry fires UploadRetrySkipError ---
       let throwOnce = true;
-      const throwRef = React.createRef<any>();
+      const ref3 = React.createRef<any>();
       const throwOnError = sinon.spy();
-      const { container: c2, unmount: u2 } = render(
+      let retryOnStartCalled = 0;
+      const { container: c3, unmount: u3 } = render(
         <Upload
-          ref={throwRef}
+          ref={ref3}
           action="/test"
+          onStart={() => {
+            retryOnStartCalled += 1;
+          }}
           customRequest={() => {
             if (throwOnce) {
               throwOnce = false;
@@ -463,33 +469,135 @@ describe('uploader', () => {
         />,
       );
 
-      const file2 = {
-        name: 'throw-cleanup.png',
+      const file3 = {
+        name: 'throw-retry.png',
         toString() {
           return this.name;
         },
       };
-      (file2 as any).uid = 'uid-throw-path';
-      const files2 = [file2];
-      (files2 as any).item = (i: number) => files2[i];
+      const files3 = [file3];
+      (files3 as any).item = (i: number) => files3[i];
 
       const initialRequestCount = requests.length;
-      fireEvent.change(c2.querySelector('input')!, { target: { files: files2 } });
+      fireEvent.change(c3.querySelector('input')!, { target: { files: files3 } });
       await sleep(0);
 
-      // customRequest sync throw: onError notified, no real XHR created
       expect(throwOnError.calledOnce).toBeTruthy();
       expect(throwOnError.firstCall.args[0]?.message).toBe('sync throw');
       expect(requests.length).toBe(initialRequestCount);
 
-      // Cache cleared after throw, retry fires UploadRetrySkipError
-      throwRef.current.retry(file2 as any);
+      retryOnStartCalled = 0;
+      ref3.current.retry(file3 as any);
+      await sleep(0);
+
+      expect(throwOnError.callCount).toBe(1);
+      expect(retryOnStartCalled).toBe(1);
+      u3();
+    });
+
+    it('customRequest edge cases: void return and sync onError', async () => {
+      const ref1 = React.createRef<any>();
+      let onStartCallCount = 0;
+      const { container: c1, unmount: u1 } = render(
+        <Upload
+          ref={ref1}
+          action="/test"
+          onStart={() => {
+            onStartCallCount += 1;
+          }}
+          customRequest={() => {}}
+        />,
+      );
+
+      const file1 = {
+        name: 'void-custom.png',
+        toString() {
+          return this.name;
+        },
+      };
+      const files1 = [file1];
+      (files1 as any).item = (i: number) => files1[i];
+
+      fireEvent.change(c1.querySelector('input')!, { target: { files: files1 } });
+      await sleep(0);
+
+      const ajaxRef = (ref1 as any).current?.uploader;
+      const uid = Object.keys(ajaxRef.reqs)[0];
+      delete ajaxRef.reqs[uid];
+
+      onStartCallCount = 0;
+
+      ref1.current.retry(file1 as any);
+      ref1.current.retry(file1 as any);
+      await sleep(0);
+
+      expect(onStartCallCount).toBe(1);
+      u1();
+
+      const ref2 = React.createRef<any>();
+      let retryOnStartCalled = 0;
+      const { container: c2, unmount: u2 } = render(
+        <Upload
+          ref={ref2}
+          action="/test"
+          onStart={() => {
+            retryOnStartCalled += 1;
+          }}
+          customRequest={(options: any) => {
+            options.onError(new Error('sync error'));
+          }}
+        />,
+      );
+
+      const file2 = {
+        name: 'sync-onerror.png',
+        toString() {
+          return this.name;
+        },
+      };
+      const files2 = [file2];
+      (files2 as any).item = (i: number) => files2[i];
+
+      fireEvent.change(c2.querySelector('input')!, { target: { files: files2 } });
+      await sleep(0);
+
+      expect(retryOnStartCalled).toBe(1);
+
+      ref2.current.retry(file2 as any);
+      await sleep(0);
+
+      expect(retryOnStartCalled).toBe(2);
+      u2();
+    });
+
+    it('retry does not send request after unmount', async () => {
+      const uploadRef = React.createRef<any>();
+      const { container, unmount } = render(<Upload ref={uploadRef} action="/test" />);
+
+      const file = {
+        name: 'unmount-test.png',
+        toString() {
+          return this.name;
+        },
+      };
+      const files = [file];
+      (files as any).item = (i: number) => files[i];
+
+      fireEvent.change(container.querySelector('input')!, { target: { files } });
+      await sleep(0);
+      requests[0].respond(400, {}, 'error 400');
+
+      const initialRequestCount = requests.length;
+
+      const ajaxRef = (uploadRef as any).current?.uploader;
+      const ajaxRetry = ajaxRef.retry;
+
+      unmount();
+
+      ajaxRetry.call(ajaxRef, file as any);
       await sleep(0);
 
       expect(requests.length).toBe(initialRequestCount);
-      expect(throwOnError.callCount).toBe(2);
-      expect(throwOnError.secondCall.args[0]?.name).toBe('UploadRetrySkipError');
-      u2();
     });
 
     it('drag to upload', done => {
