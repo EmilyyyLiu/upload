@@ -304,8 +304,8 @@ class AjaxUploader extends Component<UploadProps> {
       },
     };
 
-    onStart(origin);
     this.reqs[uid] = {};
+    onStart(origin);
     try {
       const handle = request(requestOption, { defaultRequest });
       if (this.reqs[uid]) {
@@ -313,6 +313,11 @@ class AjaxUploader extends Component<UploadProps> {
       }
     } catch (e) {
       delete this.reqs[uid];
+      this.fileInfoCache.delete(uid);
+      const { onError } = this.props;
+      const err = e as UploadRequestError;
+      err.name = err.name || 'UploadRequestError';
+      onError?.(err, null, parsedFile);
     }
   }
 

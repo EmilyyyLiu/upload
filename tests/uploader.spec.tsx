@@ -253,32 +253,6 @@ describe('uploader', () => {
       }, 100);
     });
 
-    it('retry should make new request for a previously uploaded file', async () => {
-      const uploadRef = React.createRef<any>();
-      const { container, unmount } = render(<Upload ref={uploadRef} action="/test" />);
-
-      const file = {
-        name: 'retry.png',
-        toString() {
-          return this.name;
-        },
-      };
-      const files = [file];
-      (files as any).item = (i: number) => files[i];
-
-      const input = container.querySelector('input')!;
-      fireEvent.change(input, { target: { files } });
-      await sleep(0);
-      requests[0].respond(400, {}, `error 400`);
-
-      const initialRequestCount = requests.length;
-      uploadRef.current.retry(file as any);
-      await sleep(0);
-
-      expect(requests.length).toBe(initialRequestCount + 1);
-      unmount();
-    });
-
     it('retry should not make request for a file that was never uploaded', async () => {
       const uploadRef = React.createRef<any>();
       const { unmount } = render(<Upload ref={uploadRef} action="/test" />);
@@ -351,6 +325,155 @@ describe('uploader', () => {
       expect(onError.calledOnce).toBeTruthy();
       expect(onError.firstCall.args[0]?.name).toBe('UploadRetrySkipError');
       unmount();
+    });
+    it('customRequest sync throw should notify via onError', async () => {
+      const syncThrowRef = React.createRef<any>();
+      const onError = sinon.spy();
+      const { container, unmount } = render(
+        <Upload
+          ref={syncThrowRef}
+          action="/test"
+          customRequest={() => {
+            throw new Error('sync boom');
+          }}
+          onError={onError}
+        />,
+      );
+
+      const file = {
+        name: 'sync-throw.png',
+        toString() {
+          return this.name;
+        },
+      };
+      const files = [file];
+      (files as any).item = (i: number) => files[i];
+
+      const input = container.querySelector('input')!;
+      const initialRequestCount = requests.length;
+      fireEvent.change(input, { target: { files } });
+      await sleep(0);
+
+      expect(onError.calledOnce).toBeTruthy();
+      expect(onError.firstCall.args[0]?.message).toBe('sync boom');
+      // No real XHR was created since customRequest threw before it could call defaultRequest
+      expect(requests.length).toBe(initialRequestCount);
+      unmount();
+    });
+
+    it('retry should not re-run beforeUpload, action, or data', async () => {
+      const beforeUpload = sinon.spy((file: any) => file);
+      const action = sinon.stub().returns('/retry-action');
+      const data = sinon.stub().returns({ key: 'value' });
+      const uploadRef = React.createRef<any>();
+      const { container, unmount } = render(
+        <Upload ref={uploadRef} action={action} data={data} beforeUpload={beforeUpload} />,
+      );
+
+      const file = {
+        name: 'no-reprocess.png',
+        toString() {
+          return this.name;
+        },
+      };
+      (file as any).uid = 'fixed-uid-no-reprocess';
+      const files = [file];
+      (files as any).item = (i: number) => files[i];
+
+      const input = container.querySelector('input')!;
+      fireEvent.change(input, { target: { files } });
+      await sleep(0);
+      requests[0].respond(400, {}, `error 400`);
+
+      const callCountBefore = beforeUpload.callCount;
+      const actionCallCount = action.callCount;
+      const dataCallCount = data.callCount;
+
+      uploadRef.current.retry(file as any);
+      await sleep(0);
+
+      // beforeUpload, action, data should NOT be called again during retry
+      expect(beforeUpload.callCount).toBe(callCountBefore);
+      expect(action.callCount).toBe(actionCallCount);
+      expect(data.callCount).toBe(dataCallCount);
+
+      expect(requests.length).toBe(2);
+      unmount();
+    });
+
+    it('cache cleared on success and sync throw, retry fires UploadRetrySkipError', async () => {
+      // --- Path 1: onSuccess clears cache ---
+      const successRef = React.createRef<any>();
+      const successOnError = sinon.spy();
+      const { container: c1, unmount: u1 } = render(
+        <Upload ref={successRef} action="/test" onError={successOnError} />,
+      );
+
+      const file1 = {
+        name: 'success-cleanup.png',
+        toString() {
+          return this.name;
+        },
+      };
+      (file1 as any).uid = 'uid-success-path';
+      const files1 = [file1];
+      (files1 as any).item = (i: number) => files1[i];
+
+      fireEvent.change(c1.querySelector('input')!, { target: { files: files1 } });
+      await sleep(0);
+      requests[requests.length - 1].respond(200, {}, `["","ok"]`);
+
+      const countAfterSuccess = requests.length;
+      successRef.current.retry(file1 as any);
+      await sleep(0);
+
+      expect(requests.length).toBe(countAfterSuccess);
+      expect(successOnError.calledOnce).toBeTruthy();
+      expect(successOnError.firstCall.args[0]?.name).toBe('UploadRetrySkipError');
+      u1();
+
+      // --- Path 2: request sync throw clears cache ---
+      let throwOnce = true;
+      const throwRef = React.createRef<any>();
+      const throwOnError = sinon.spy();
+      const { container: c2, unmount: u2 } = render(
+        <Upload
+          ref={throwRef}
+          action="/test"
+          customRequest={() => {
+            if (throwOnce) {
+              throwOnce = false;
+              throw new Error('sync throw');
+            }
+          }}
+          onError={throwOnError}
+        />,
+      );
+
+      const file2 = {
+        name: 'throw-cleanup.png',
+        toString() {
+          return this.name;
+        },
+      };
+      (file2 as any).uid = 'uid-throw-path';
+      const files2 = [file2];
+      (files2 as any).item = (i: number) => files2[i];
+
+      fireEvent.change(c2.querySelector('input')!, { target: { files: files2 } });
+      await sleep(0);
+
+      expect(throwOnError.calledOnce).toBeTruthy();
+      expect(throwOnError.firstCall.args[0]?.message).toBe('sync throw');
+
+      const countAfterThrow = requests.length;
+      throwRef.current.retry(file2 as any);
+      await sleep(0);
+
+      expect(requests.length).toBe(countAfterThrow);
+      expect(throwOnError.callCount).toBe(2);
+      expect(throwOnError.secondCall.args[0]?.name).toBe('UploadRetrySkipError');
+      u2();
     });
 
     it('drag to upload', done => {
