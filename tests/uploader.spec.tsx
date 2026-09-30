@@ -521,9 +521,7 @@ describe('uploader', () => {
       fireEvent.change(c1.querySelector('input')!, { target: { files: files1 } });
       await sleep(0);
 
-      const ajaxRef = (ref1 as any).current?.uploader;
-      const uid = Object.keys(ajaxRef.reqs)[0];
-      delete ajaxRef.reqs[uid];
+      ref1.current.abort(file1 as any);
 
       onStartCallCount = 0;
 
@@ -567,6 +565,65 @@ describe('uploader', () => {
       await sleep(0);
 
       expect(retryOnStartCalled).toBe(2);
+      u2();
+    });
+
+    it('catch normalizes non-Error throw, retry works after sync onSuccess', async () => {
+      const mkFile = (name: string) => {
+        const f = {
+          name,
+          toString() {
+            return this.name;
+          },
+        };
+        return f;
+      };
+      const mkFiles = (f: any) => {
+        const a = [f];
+        (a as any).item = (i: number) => a[i];
+        return a;
+      };
+
+      // Path 1: string throw → normalized to Error
+      const onError1 = sinon.spy();
+      const { container: c1, unmount: u1 } = render(
+        <Upload
+          action="/test"
+          onError={onError1}
+          customRequest={() => {
+            throw 'string error';
+          }}
+        />,
+      );
+      fireEvent.change(c1.querySelector('input')!, { target: { files: mkFiles(mkFile('s.png')) } });
+      await sleep(0);
+      expect(onError1.calledOnce).toBeTruthy();
+      expect(onError1.firstCall.args[0]).toBeInstanceOf(Error);
+      expect(onError1.firstCall.args[0].message).toBe('string error');
+      u1();
+
+      // Path 2: sync onSuccess → reqs cleaned, retry works
+      const ref = React.createRef<any>();
+      let onStartCalled = 0;
+      const { container: c2, unmount: u2 } = render(
+        <Upload
+          ref={ref}
+          action="/test"
+          onStart={() => {
+            onStartCalled += 1;
+          }}
+          customRequest={(opts: any) => {
+            opts.onSuccess({}, null);
+          }}
+        />,
+      );
+      const okFile = mkFile('ok.png');
+      fireEvent.change(c2.querySelector('input')!, { target: { files: mkFiles(okFile) } });
+      await sleep(0);
+      expect(onStartCalled).toBe(1);
+      ref.current.retry(okFile as any);
+      await sleep(0);
+      expect(onStartCalled).toBe(2);
       u2();
     });
 

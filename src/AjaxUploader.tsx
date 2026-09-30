@@ -317,9 +317,8 @@ class AjaxUploader extends Component<UploadProps> {
     } catch (e) {
       delete this.reqs[uid];
       const { onError } = this.props;
-      const err = e as UploadRequestError;
-      err.name = err.name || 'UploadRequestError';
-      onError?.(err, null, parsedFile);
+      const err = e instanceof Error ? e : new Error(String(e));
+      onError?.(err as UploadRequestError, null, parsedFile);
     }
   }
 
