@@ -253,9 +253,10 @@ describe('uploader', () => {
       }, 100);
     });
 
-    it('retry should not make request for a file that was never uploaded', async () => {
+    it('retry skips and fires UploadRetrySkipError for never-uploaded file', async () => {
       const uploadRef = React.createRef<any>();
-      const { unmount } = render(<Upload ref={uploadRef} action="/test" />);
+      const onError = sinon.spy();
+      const { unmount } = render(<Upload ref={uploadRef} action="/test" onError={onError} />);
 
       const file = {
         name: 'never-uploaded.png',
@@ -268,96 +269,110 @@ describe('uploader', () => {
       uploadRef.current.retry(file as any);
       await sleep(0);
 
+      // No XHR created, and onError receives UploadRetrySkipError
       expect(requests.length).toBe(initialRequestCount);
+      expect(onError.calledOnce).toBeTruthy();
+      expect(onError.firstCall.args[0]?.name).toBe('UploadRetrySkipError');
       unmount();
     });
 
-    it('retry should not start overlapping request for the same file', async () => {
+    it('double retry only starts one request and abort still works', async () => {
       const uploadRef = React.createRef<any>();
-      const { container, unmount } = render(<Upload ref={uploadRef} action="/test" />);
+      let onStartCalled = 0;
+      const { container, unmount } = render(
+        <Upload
+          ref={uploadRef}
+          action="/test"
+          onStart={() => {
+            onStartCalled += 1;
+          }}
+        />,
+      );
 
       const file = {
-        name: 'overlap.png',
+        name: 'dedup.png',
         toString() {
           return this.name;
         },
       };
-      (file as any).uid = 'fixed-overlap-uid';
+      (file as any).uid = 'fixed-dedup-uid';
       const files = [file];
       (files as any).item = (i: number) => files[i];
 
-      // First upload populates cache; the fixed uid is reused by retry.
-      const input = container.querySelector('input')!;
-      fireEvent.change(input, { target: { files } });
+      fireEvent.change(container.querySelector('input')!, { target: { files } });
       await sleep(0);
       requests[0].respond(400, {}, `error 400`);
 
       const initialRequestCount = requests.length;
+      onStartCalled = 0;
 
+      // reqs placeholder is set synchronously before onStart/request,
+      // so a second retry in the same tick is blocked
       uploadRef.current.retry(file as any);
       uploadRef.current.retry(file as any);
       await sleep(0);
 
+      // Only one request created, onStart called only once
+      expect(onStartCalled).toBe(1);
       expect(requests.length).toBe(initialRequestCount + 1);
-
       expect(requests[requests.length - 1].aborted).toBeFalsy();
 
+      // Abort still works
       uploadRef.current.abort(file);
       expect(requests[requests.length - 1].aborted).toBe(true);
       unmount();
     });
 
-    it('retry should fire onError for a file that was never uploaded', async () => {
+    it('onStart throw should not leak reqs placeholder', async () => {
       const uploadRef = React.createRef<any>();
-      const onError = sinon.spy();
-      const { unmount } = render(<Upload ref={uploadRef} action="/test" onError={onError} />);
-
-      const file = {
-        name: 'never-uploaded-error.png',
-        toString() {
-          return this.name;
-        },
-      };
-
-      uploadRef.current.retry(file as any);
-      await sleep(0);
-
-      expect(onError.calledOnce).toBeTruthy();
-      expect(onError.firstCall.args[0]?.name).toBe('UploadRetrySkipError');
-      unmount();
-    });
-    it('customRequest sync throw should notify via onError', async () => {
-      const syncThrowRef = React.createRef<any>();
-      const onError = sinon.spy();
+      const innerRef = React.createRef<any>();
       const { container, unmount } = render(
         <Upload
-          ref={syncThrowRef}
-          action="/test"
-          customRequest={() => {
-            throw new Error('sync boom');
+          ref={(node: any) => {
+            (uploadRef as any).current = node;
+            if (node?.uploader) {
+              (innerRef as any).current = node.uploader;
+            }
           }}
-          onError={onError}
+          action="/test"
         />,
       );
 
       const file = {
-        name: 'sync-throw.png',
+        name: 'onstart-throw.png',
         toString() {
           return this.name;
         },
       };
+      (file as any).uid = 'fixed-onstart-throw-uid';
       const files = [file];
       (files as any).item = (i: number) => files[i];
 
-      const input = container.querySelector('input')!;
-      const initialRequestCount = requests.length;
-      fireEvent.change(input, { target: { files } });
+      fireEvent.change(container.querySelector('input')!, { target: { files } });
       await sleep(0);
+      requests[0].respond(400, {}, `error 400`);
 
-      expect(onError.calledOnce).toBeTruthy();
-      expect(onError.firstCall.args[0]?.message).toBe('sync boom');
-      // No real XHR was created since customRequest threw before it could call defaultRequest
-      expect(requests.length).toBe(initialRequestCount);
+      const ajaxRef = (uploadRef as any).current?.uploader;
+
+      // Simulate onStart throwing
+      const originalOnStart = ajaxRef.props.onStart;
+      let throwCount = 0;
+      ajaxRef.props.onStart = () => {
+        throwCount += 1;
+        throw new Error('onStart boom');
+      };
+
+      // Retry: onStart throws, reqs[uid] placeholder is cleaned up
+      expect(() => {
+        uploadRef.current.retry(file as any);
+      }).toThrow('onStart boom');
+      expect(ajaxRef.reqs['fixed-onstart-throw-uid']).toBeUndefined();
+
+      // Restore onStart so second retry works
+      ajaxRef.props.onStart = originalOnStart;
+      uploadRef.current.retry(file as any);
+      await sleep(0);
+      expect(requests.length).toBe(2);
       unmount();
     });
 
@@ -392,17 +407,15 @@ describe('uploader', () => {
       uploadRef.current.retry(file as any);
       await sleep(0);
 
-      // beforeUpload, action, data should NOT be called again during retry
       expect(beforeUpload.callCount).toBe(callCountBefore);
       expect(action.callCount).toBe(actionCallCount);
       expect(data.callCount).toBe(dataCallCount);
-
       expect(requests.length).toBe(2);
       unmount();
     });
 
-    it('cache cleared on success and sync throw, retry fires UploadRetrySkipError', async () => {
-      // --- Path 1: onSuccess clears cache ---
+    it('cache cleared: success or sync throw blocks subsequent retry', async () => {
+      // --- Path 1: onSuccess clears cache, retry fires UploadRetrySkipError ---
       const successRef = React.createRef<any>();
       const successOnError = sinon.spy();
       const { container: c1, unmount: u1 } = render(
@@ -432,7 +445,7 @@ describe('uploader', () => {
       expect(successOnError.firstCall.args[0]?.name).toBe('UploadRetrySkipError');
       u1();
 
-      // --- Path 2: request sync throw clears cache ---
+      // --- Path 2: customRequest sync throw clears cache, onError notified, retry fires UploadRetrySkipError ---
       let throwOnce = true;
       const throwRef = React.createRef<any>();
       const throwOnError = sinon.spy();
@@ -460,17 +473,20 @@ describe('uploader', () => {
       const files2 = [file2];
       (files2 as any).item = (i: number) => files2[i];
 
+      const initialRequestCount = requests.length;
       fireEvent.change(c2.querySelector('input')!, { target: { files: files2 } });
       await sleep(0);
 
+      // customRequest sync throw: onError notified, no real XHR created
       expect(throwOnError.calledOnce).toBeTruthy();
       expect(throwOnError.firstCall.args[0]?.message).toBe('sync throw');
+      expect(requests.length).toBe(initialRequestCount);
 
-      const countAfterThrow = requests.length;
+      // Cache cleared after throw, retry fires UploadRetrySkipError
       throwRef.current.retry(file2 as any);
       await sleep(0);
 
-      expect(requests.length).toBe(countAfterThrow);
+      expect(requests.length).toBe(initialRequestCount);
       expect(throwOnError.callCount).toBe(2);
       expect(throwOnError.secondCall.args[0]?.name).toBe('UploadRetrySkipError');
       u2();

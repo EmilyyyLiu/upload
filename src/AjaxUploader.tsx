@@ -305,7 +305,12 @@ class AjaxUploader extends Component<UploadProps> {
     };
 
     this.reqs[uid] = {};
-    onStart(origin);
+    try {
+      onStart(origin);
+    } catch (e) {
+      delete this.reqs[uid];
+      throw e;
+    }
     try {
       const handle = request(requestOption, { defaultRequest });
       if (this.reqs[uid]) {
