@@ -253,9 +253,9 @@ describe('uploader', () => {
       }, 100);
     });
 
-    it('retry should make new request', done => {
+    it('retry should make new request for a previously uploaded file', async () => {
       const uploadRef = React.createRef<any>();
-      render(<Upload ref={uploadRef} action="/test" />);
+      const { container, unmount } = render(<Upload ref={uploadRef} action="/test" />);
 
       const file = {
         name: 'retry.png',
@@ -266,47 +266,41 @@ describe('uploader', () => {
       const files = [file];
       (files as any).item = (i: number) => files[i];
 
+      const input = container.querySelector('input')!;
+      fireEvent.change(input, { target: { files } });
+      await sleep(0);
+      requests[0].respond(400, {}, `error 400`);
+
       const initialRequestCount = requests.length;
-
       uploadRef.current.retry(file as any);
+      await sleep(0);
 
-      setTimeout(() => {
-        expect(requests.length).toBe(initialRequestCount + 1);
-        done();
-      }, 100);
+      expect(requests.length).toBe(initialRequestCount + 1);
+      unmount();
     });
 
-    it('retry should not make request when action rejects', done => {
+    it('retry should not make request for a file that was never uploaded', async () => {
       const uploadRef = React.createRef<any>();
-      render(
-        <Upload
-          ref={uploadRef}
-          action={async () => {
-            throw new Error('action error');
-          }}
-        />,
-      );
+      const { unmount } = render(<Upload ref={uploadRef} action="/test" />);
 
       const file = {
-        name: 'reject.png',
+        name: 'never-uploaded.png',
         toString() {
           return this.name;
         },
       };
 
       const initialRequestCount = requests.length;
-
       uploadRef.current.retry(file as any);
+      await sleep(0);
 
-      setTimeout(() => {
-        expect(requests.length).toBe(initialRequestCount);
-        done();
-      }, 100);
+      expect(requests.length).toBe(initialRequestCount);
+      unmount();
     });
 
-    it('retry should not start overlapping request for the same file', done => {
+    it('retry should not start overlapping request for the same file', async () => {
       const uploadRef = React.createRef<any>();
-      render(<Upload ref={uploadRef} action="/test" />);
+      const { container, unmount } = render(<Upload ref={uploadRef} action="/test" />);
 
       const file = {
         name: 'overlap.png',
@@ -315,21 +309,48 @@ describe('uploader', () => {
         },
       };
       (file as any).uid = 'fixed-overlap-uid';
+      const files = [file];
+      (files as any).item = (i: number) => files[i];
+
+      // First upload populates cache; the fixed uid is reused by retry.
+      const input = container.querySelector('input')!;
+      fireEvent.change(input, { target: { files } });
+      await sleep(0);
+      requests[0].respond(400, {}, `error 400`);
 
       const initialRequestCount = requests.length;
 
       uploadRef.current.retry(file as any);
       uploadRef.current.retry(file as any);
+      await sleep(0);
 
-      setTimeout(() => {
-        expect(requests.length).toBe(initialRequestCount + 1);
+      expect(requests.length).toBe(initialRequestCount + 1);
 
-        expect(requests[requests.length - 1].aborted).toBeFalsy();
+      expect(requests[requests.length - 1].aborted).toBeFalsy();
 
-        uploadRef.current.abort(file);
-        expect(requests[requests.length - 1].aborted).toBe(true);
-        done();
-      }, 100);
+      uploadRef.current.abort(file);
+      expect(requests[requests.length - 1].aborted).toBe(true);
+      unmount();
+    });
+
+    it('retry should fire onError for a file that was never uploaded', async () => {
+      const uploadRef = React.createRef<any>();
+      const onError = sinon.spy();
+      const { unmount } = render(<Upload ref={uploadRef} action="/test" onError={onError} />);
+
+      const file = {
+        name: 'never-uploaded-error.png',
+        toString() {
+          return this.name;
+        },
+      };
+
+      uploadRef.current.retry(file as any);
+      await sleep(0);
+
+      expect(onError.calledOnce).toBeTruthy();
+      expect(onError.firstCall.args[0]?.name).toBe('UploadRetrySkipError');
+      unmount();
     });
 
     it('drag to upload', done => {
